@@ -47,12 +47,20 @@ class SearchResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class Member(BaseModel):
+    """Tenant team member entity."""
+
+    email: str
+    team_id: str
+    api_key: str
+    created_at: str | None = None
+
+
 class Team(BaseModel):
     """Tenant/Team account entity."""
 
     id: str
     name: str
-    api_key: str
     default_chunk_size: int = 800
     default_chunk_overlap: int = 100
     created_at: str | None = None

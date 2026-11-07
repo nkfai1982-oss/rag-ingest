@@ -2,25 +2,43 @@
 
 import uuid
 
-from rag_ingest.domain.entities import Dataset, Document, DocumentChunk, Team
+from rag_ingest.domain.entities import Dataset, Document, DocumentChunk, Member, Team
 from rag_ingest.storage.qdrant.store import QdrantVectorStore
 from rag_ingest.storage.sqlite.repository import SQLiteMetadataRepository
 
 
 def test_sqlite_repository_crud(sqlite_repo: SQLiteMetadataRepository) -> None:
-    # 1. Team CRUD
+    # 1. Team & Member CRUD
     team = Team(
         id="team_test_repo",
         name="Repo Team",
-        api_key="secret_repo_key",
         default_chunk_size=600,
         default_chunk_overlap=60,
     )
     sqlite_repo.create_team(team)
 
-    retrieved_team = sqlite_repo.get_team_by_api_key("secret_repo_key")
+    retrieved_team = sqlite_repo.get_team_by_id("team_test_repo")
     assert retrieved_team is not None
-    assert retrieved_team.id == "team_test_repo"
+    assert retrieved_team.name == "Repo Team"
+
+    member = Member(
+        email="repo_user@example.com",
+        team_id="team_test_repo",
+        api_key="secret_repo_key",
+    )
+    sqlite_repo.create_member(member)
+
+    retrieved_member = sqlite_repo.get_member_by_api_key("secret_repo_key")
+    assert retrieved_member is not None
+    assert retrieved_member.email == "repo_user@example.com"
+    assert retrieved_member.team_id == "team_test_repo"
+
+    by_email = sqlite_repo.get_member_by_email("repo_user@example.com")
+    assert by_email is not None
+    assert by_email.api_key == "secret_repo_key"
+
+    team_members = sqlite_repo.list_members_by_team("team_test_repo")
+    assert len(team_members) == 1
 
     # 2. Dataset CRUD
     ds = Dataset(

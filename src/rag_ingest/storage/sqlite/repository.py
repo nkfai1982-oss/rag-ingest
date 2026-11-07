@@ -3,7 +3,7 @@
 import sqlite3
 from datetime import UTC, datetime
 
-from rag_ingest.domain.entities import Dataset, Document, IngestionJob, Team
+from rag_ingest.domain.entities import Dataset, Document, IngestionJob, Member, Team
 from rag_ingest.domain.protocols import BaseMetadataRepository
 from rag_ingest.storage.sqlite.connection import SQLiteConnection
 
@@ -24,13 +24,21 @@ class SQLiteMetadataRepository(BaseMetadataRepository):
                 CREATE TABLE IF NOT EXISTS teams (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
-                    api_key TEXT UNIQUE NOT NULL,
                     default_chunk_size INTEGER DEFAULT 800,
                     default_chunk_overlap INTEGER DEFAULT 100,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
-                -- 2. Datasets (Knowledge Bases)
+                -- 2. Team Members Registry
+                CREATE TABLE IF NOT EXISTS members (
+                    email TEXT PRIMARY KEY,
+                    team_id TEXT NOT NULL,
+                    api_key TEXT UNIQUE NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+                );
+
+                -- 3. Datasets (Knowledge Bases)
                 CREATE TABLE IF NOT EXISTS datasets (
                     id TEXT PRIMARY KEY,
                     team_id TEXT NOT NULL,
@@ -40,7 +48,7 @@ class SQLiteMetadataRepository(BaseMetadataRepository):
                     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
                 );
 
-                -- 3. Document Registry
+                -- 4. Document Registry
                 CREATE TABLE IF NOT EXISTS documents (
                     id TEXT PRIMARY KEY,
                     team_id TEXT NOT NULL,
@@ -59,7 +67,7 @@ class SQLiteMetadataRepository(BaseMetadataRepository):
                     FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE
                 );
 
-                -- 4. Ingestion Jobs
+                -- 5. Ingestion Jobs
                 CREATE TABLE IF NOT EXISTS ingestion_jobs (
                     id TEXT PRIMARY KEY,
                     document_id TEXT,
@@ -72,11 +80,39 @@ class SQLiteMetadataRepository(BaseMetadataRepository):
                     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
                 );
 
+                CREATE INDEX IF NOT EXISTS idx_members_team ON members(team_id);
+                CREATE INDEX IF NOT EXISTS idx_members_api_key ON members(api_key);
                 CREATE INDEX IF NOT EXISTS idx_docs_team_dataset ON documents(team_id, dataset_id);
                 CREATE INDEX IF NOT EXISTS idx_docs_hash ON documents(team_id, file_hash);
                 CREATE INDEX IF NOT EXISTS idx_jobs_status ON ingestion_jobs(status);
                 """
             )
+
+            # Migrate legacy api_key column from teams if it exists
+            cursor.execute("PRAGMA table_info(teams);")
+            team_cols = [row["name"] for row in cursor.fetchall()]
+            if "api_key" in team_cols:
+                cursor.executescript(
+                    """
+                    PRAGMA foreign_keys = OFF;
+                    CREATE TABLE teams_new (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        default_chunk_size INTEGER DEFAULT 800,
+                        default_chunk_overlap INTEGER DEFAULT 100,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    INSERT INTO teams_new (
+                        id, name, default_chunk_size, default_chunk_overlap, created_at
+                    )
+                    SELECT
+                        id, name, default_chunk_size, default_chunk_overlap, created_at
+                    FROM teams;
+                    DROP TABLE teams;
+                    ALTER TABLE teams_new RENAME TO teams;
+                    PRAGMA foreign_keys = ON;
+                    """
+                )
 
     # Teams
     def create_team(self, team: Team) -> Team:
@@ -86,36 +122,19 @@ class SQLiteMetadataRepository(BaseMetadataRepository):
             cursor.execute(
                 """
                 INSERT INTO teams (
-                    id, name, api_key, default_chunk_size, default_chunk_overlap, created_at
+                    id, name, default_chunk_size, default_chunk_overlap, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     team.id,
                     team.name,
-                    team.api_key,
                     team.default_chunk_size,
                     team.default_chunk_overlap,
                     team.created_at or now,
                 ),
             )
             return team
-
-    def get_team_by_api_key(self, api_key: str) -> Team | None:
-        with self._provider.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM teams WHERE api_key = ?", (api_key,))
-            row = cursor.fetchone()
-            if not row:
-                return None
-            return Team(
-                id=row["id"],
-                name=row["name"],
-                api_key=row["api_key"],
-                default_chunk_size=row["default_chunk_size"],
-                default_chunk_overlap=row["default_chunk_overlap"],
-                created_at=row["created_at"],
-            )
 
     def get_team_by_id(self, team_id: str) -> Team | None:
         with self._provider.get_connection() as conn:
@@ -127,7 +146,6 @@ class SQLiteMetadataRepository(BaseMetadataRepository):
             return Team(
                 id=row["id"],
                 name=row["name"],
-                api_key=row["api_key"],
                 default_chunk_size=row["default_chunk_size"],
                 default_chunk_overlap=row["default_chunk_overlap"],
                 created_at=row["created_at"],
@@ -142,13 +160,94 @@ class SQLiteMetadataRepository(BaseMetadataRepository):
                 Team(
                     id=row["id"],
                     name=row["name"],
-                    api_key=row["api_key"],
                     default_chunk_size=row["default_chunk_size"],
                     default_chunk_overlap=row["default_chunk_overlap"],
                     created_at=row["created_at"],
                 )
                 for row in rows
             ]
+
+    # Members
+    def create_member(self, member: Member) -> Member:
+        now = datetime.now(UTC).isoformat()
+        with self._provider.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO members (email, team_id, api_key, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    member.email,
+                    member.team_id,
+                    member.api_key,
+                    member.created_at or now,
+                ),
+            )
+            return member
+
+    def get_member_by_email(self, email: str) -> Member | None:
+        with self._provider.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM members WHERE email = ?", (email,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return Member(
+                email=row["email"],
+                team_id=row["team_id"],
+                api_key=row["api_key"],
+                created_at=row["created_at"],
+            )
+
+    def get_member_by_api_key(self, api_key: str) -> Member | None:
+        with self._provider.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM members WHERE api_key = ?", (api_key,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return Member(
+                email=row["email"],
+                team_id=row["team_id"],
+                api_key=row["api_key"],
+                created_at=row["created_at"],
+            )
+
+    def list_members_by_team(self, team_id: str) -> list[Member]:
+        with self._provider.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM members WHERE team_id = ? ORDER BY created_at ASC",
+                (team_id,),
+            )
+            rows = cursor.fetchall()
+            return [
+                Member(
+                    email=row["email"],
+                    team_id=row["team_id"],
+                    api_key=row["api_key"],
+                    created_at=row["created_at"],
+                )
+                for row in rows
+            ]
+
+    def update_member_api_key(self, email: str, new_api_key: str) -> Member | None:
+        with self._provider.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE members SET api_key = ? WHERE email = ?",
+                (new_api_key, email),
+            )
+            if cursor.rowcount == 0:
+                return None
+            return self.get_member_by_email(email)
+
+    def delete_member(self, email: str, team_id: str) -> bool:
+        with self._provider.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM members WHERE email = ? AND team_id = ?", (email, team_id))
+            return cursor.rowcount > 0
 
     # Datasets
     def create_dataset(self, dataset: Dataset) -> Dataset:

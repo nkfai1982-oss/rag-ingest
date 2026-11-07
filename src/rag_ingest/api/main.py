@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from rag_ingest.api.dependencies import get_repository, get_settings, get_vector_store
-from rag_ingest.api.routes import documents, ingest, retrieval, teams
+from rag_ingest.api.routes import documents, ingest, members, retrieval, teams
 from rag_ingest.config import settings
 from rag_ingest.exceptions import (
     AuthenticationError,
@@ -113,6 +113,7 @@ def create_app() -> FastAPI:
         )
 
     # Register Routers
+    app.include_router(members.router)
     app.include_router(teams.router)
     app.include_router(ingest.router)
     app.include_router(retrieval.router)

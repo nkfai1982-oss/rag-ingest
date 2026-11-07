@@ -60,12 +60,45 @@ class DocumentResponse(BaseModel):
     updated_at: str | None = None
 
 
+class MemberRegisterRequest(BaseModel):
+    """Payload to register a new member and specify their team."""
+
+    email: str = Field(..., min_length=3, description="Member unique ID (email)")
+    team_id: str = Field(..., min_length=1, description="Target team identifier")
+    team_name: str | None = Field(
+        default=None,
+        description="Optional team name if creating a new team",
+    )
+
+
+class MemberResponse(BaseModel):
+    """Public team member information."""
+
+    email: str
+    team_id: str
+    created_at: str | None = None
+
+
+class MemberRegisterResponse(BaseModel):
+    """Response returned upon successful member registration including API key."""
+
+    email: str
+    team_id: str
+    api_key: str
+    created_at: str | None = None
+
+
+class ApiKeyResponse(BaseModel):
+    """Response returned when an API key is regenerated."""
+
+    api_key: str
+
+
 class TeamCreateRequest(BaseModel):
     """Payload to register a new tenant team."""
 
     name: str = Field(..., min_length=1)
     id: str | None = None
-    api_key: str | None = None
     default_chunk_size: int = 800
     default_chunk_overlap: int = 100
 
@@ -75,7 +108,6 @@ class TeamResponse(BaseModel):
 
     id: str
     name: str
-    api_key: str
     default_chunk_size: int
     default_chunk_overlap: int
     created_at: str | None = None
