@@ -21,8 +21,8 @@ The system ingests **Markdown, PDF, HTML, and Word (.docx)** documents into a ve
    - **SQLite**: Single-file metadata database in WAL mode managing tenants, datasets, document statuses, job queues, and SHA-256 deduplication.
    - **Qdrant**: Stores vector embeddings **and** chunk text in payloads, enabling ultra-fast, single-hop retrieval.
 3. **Database Portability**: Hybrid search is executed via **Application-Level Reciprocal Rank Fusion (RRF)** in Python, ensuring zero vendor lock-in to Qdrant proprietary features when adding `pgvector`.
-4. **Multi-Team Tenancy**: Built-in isolation per team/tenant via SQLite API keys and Qdrant payload filters.
-5. **Future-Proof for UI**: Fully exposes REST API endpoints for document listing, status checking, and raw file download, ready for a future web dashboard.
+4. **Multi-Team Tenancy & Member-Level Authentication**: Built-in isolation per team with member-level registration, where members are identified by email and issued individual API keys to access their team's data.
+5. **Future-Proof for UI**: Fully exposes REST API endpoints for team member management, document listing, status checking, and raw file download, ready for a future web dashboard.
 
 ---
 
@@ -146,12 +146,12 @@ rag-ingest/
 | **FR-04** | **Embedding Generation** | Connect to any OpenAI-compatible embeddings endpoint (cloud or on-premise) supporting batch embedding generation. |
 | **FR-05** | **Vector Storage & Indexing** | Write dense vectors and text payloads to Qdrant, configuring HNSW indexes and a payload text index (`MULTILINGUAL`) for full-text search. |
 | **FR-06** | **Triple-Mode Retrieval** | Support three retrieval modes: `semantic` (dense vector), `full_text` (tokenized lexical match), and `hybrid` (dense + lexical fused via RRF). |
-| **FR-07** | **Multi-Tenant Isolation** | Data MUST be strictly isolated per team. Every query MUST apply a mandatory `team_id` filter. Cross-team data leaks MUST be impossible. |
+| **FR-07** | **Multi-Tenant & Member Isolation** | Data MUST be strictly isolated per team. Members register with their email and receive unique member API keys. All authenticated requests validate member API keys and resolve the team context. Every query MUST apply a mandatory `team_id` filter. Cross-team data leaks MUST be impossible. |
 | **FR-08** | **Instant Deduplication** | Calculate the SHA-256 checksum of uploaded files. Unchanged files MUST be skipped immediately without incurring embedding or DB costs. |
 | **FR-09** | **Controlled Overwrite** | If a file name matches an existing record but its content hash has changed, the system MUST support an `overwrite=true` parameter that purges previous chunks in Qdrant and re-indexes. |
 | **FR-10** | **Dual Execution Modes** | Support **Synchronous** execution (`?async=false`, returns `200 OK` with chunk count) and **Asynchronous** execution (`?async=true`, returns `202 Accepted` with `job_id`). |
 | **FR-11** | **Raw File Retention** | Preserve uploaded binary files on local filesystem (`./data/uploads/{team_id}/{document_id}.{ext}`) to support file downloads and citations in the future UI. |
-| **FR-12** | **Tenant & Dataset Management** | Provide CRUD capabilities for `teams` (with API keys and default chunking presets) and `datasets`. |
+| **FR-12** | **Tenant, Member & Dataset Management** | Provide registration and management endpoints for team members (email as ID, personal API keys), teams, and datasets. |
 
 ---
 
@@ -292,13 +292,21 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS teams (
     id TEXT PRIMARY KEY,                       -- e.g., "team_marketing", "team_eng"
     name TEXT NOT NULL,                        -- Human readable name
-    api_key TEXT UNIQUE NOT NULL,              -- Bearer token
     default_chunk_size INTEGER DEFAULT 800,
     default_chunk_overlap INTEGER DEFAULT 100,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. Datasets (Knowledge Bases)
+-- 2. Team Members Registry
+CREATE TABLE IF NOT EXISTS members (
+    email TEXT PRIMARY KEY,                    -- Member unique ID (email)
+    team_id TEXT NOT NULL,                     -- Foreign key to teams
+    api_key TEXT UNIQUE NOT NULL,              -- Member personal Bearer token
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
+);
+
+-- 3. Datasets (Knowledge Bases)
 CREATE TABLE IF NOT EXISTS datasets (
     id TEXT PRIMARY KEY,                       -- e.g., "api_reference"
     team_id TEXT NOT NULL,
@@ -308,7 +316,7 @@ CREATE TABLE IF NOT EXISTS datasets (
     FOREIGN KEY (team_id) REFERENCES teams(id) ON DELETE CASCADE
 );
 
--- 3. Document Registry (Tracks files, hashes, and statuses)
+-- 4. Document Registry (Tracks files, hashes, and statuses)
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,                       -- UUID
     team_id TEXT NOT NULL,
@@ -327,7 +335,7 @@ CREATE TABLE IF NOT EXISTS documents (
     FOREIGN KEY (dataset_id) REFERENCES datasets(id) ON DELETE CASCADE
 );
 
--- 4. Ingestion Jobs (Tracks asynchronous processing)
+-- 5. Ingestion Jobs (Tracks asynchronous processing)
 CREATE TABLE IF NOT EXISTS ingestion_jobs (
     id TEXT PRIMARY KEY,                       -- UUID
     document_id TEXT NOT NULL,
@@ -340,6 +348,8 @@ CREATE TABLE IF NOT EXISTS ingestion_jobs (
     FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_members_team ON members(team_id);
+CREATE INDEX IF NOT EXISTS idx_members_api_key ON members(api_key);
 CREATE INDEX IF NOT EXISTS idx_docs_team_dataset ON documents(team_id, dataset_id);
 CREATE INDEX IF NOT EXISTS idx_docs_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON ingestion_jobs(status);
@@ -591,11 +601,71 @@ class VectorStoreError(RagIngestError):
 
 ## 12. REST API Specification (OpenAPI Contract)
 
-### 12.1 Ingestion Endpoints
+### 12.1 Member & Team Endpoints
+
+#### `POST /v1/members/register`
+Registers a new member by email and assigns or creates their team.
+* **Request Body**:
+  ```json
+  {
+    "email": "engineer@example.com",
+    "team_id": "team_eng",
+    "team_name": "Engineering Team"
+  }
+  ```
+* **Response** (`201 Created`):
+  ```json
+  {
+    "email": "engineer@example.com",
+    "team_id": "team_eng",
+    "api_key": "rag_m_abc123...",
+    "created_at": "2026-11-07T08:00:00Z"
+  }
+  ```
+
+#### `GET /v1/members/me`
+Retrieves authenticated member profile.
+* **Headers**: `Authorization: Bearer <member_api_key>`
+* **Response** (`200 OK`):
+  ```json
+  {
+    "email": "engineer@example.com",
+    "team_id": "team_eng",
+    "created_at": "2026-11-07T08:00:00Z"
+  }
+  ```
+
+#### `POST /v1/members/me/api-key`
+Regenerates personal API key for the authenticated member.
+* **Headers**: `Authorization: Bearer <member_api_key>`
+* **Response** (`200 OK`):
+  ```json
+  {
+    "api_key": "rag_m_newkey456..."
+  }
+  ```
+
+#### `GET /v1/teams/{team_id}/members`
+Lists all members belonging to a team (for future UI team member lists).
+* **Headers**: `Authorization: Bearer <member_api_key>`
+* **Response** (`200 OK`):
+  ```json
+  [
+    {
+      "email": "engineer@example.com",
+      "team_id": "team_eng",
+      "created_at": "2026-11-07T08:00:00Z"
+    }
+  ]
+  ```
+
+---
+
+### 12.2 Ingestion Endpoints
 
 #### `POST /v1/ingest`
 Uploads and indexes a file.
-* **Headers**: `Authorization: Bearer <team_api_key>`
+* **Headers**: `Authorization: Bearer <member_api_key>`
 * **Form-Data**:
   * `file`: Binary file (`.md`, `.pdf`, `.html`, `.docx`)
   * `dataset_id`: String (Required)
@@ -637,11 +707,11 @@ Checks status of an asynchronous ingestion task.
 
 ---
 
-### 12.2 Retrieval Endpoint
+### 12.3 Retrieval Endpoint
 
 #### `POST /v1/retrieval`
 Queries the knowledge base using semantic, full-text, or hybrid search.
-* **Headers**: `Authorization: Bearer <team_api_key>`
+* **Headers**: `Authorization: Bearer <member_api_key>`
 * **Request Body**:
   ```json
   {
@@ -671,7 +741,7 @@ Queries the knowledge base using semantic, full-text, or hybrid search.
 
 ---
 
-### 12.3 Document Management Endpoints
+### 12.4 Document Management Endpoints
 
 * `GET /v1/documents?dataset_id={id}`: Lists all documents for the authenticated team.
 * `GET /v1/documents/{document_id}/download`: Streams the raw stored file from `./data/uploads/`.

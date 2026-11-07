@@ -8,6 +8,7 @@ from rag_ingest.domain.entities import (
     DocumentChunk,
     ExtractedChunk,
     IngestionJob,
+    Member,
     SearchResult,
     Team,
 )
@@ -80,11 +81,6 @@ class BaseMetadataRepository(ABC):
         pass
 
     @abstractmethod
-    def get_team_by_api_key(self, api_key: str) -> Team | None:
-        """Retrieve team by API key."""
-        pass
-
-    @abstractmethod
     def get_team_by_id(self, team_id: str) -> Team | None:
         """Retrieve team by ID."""
         pass
@@ -92,6 +88,37 @@ class BaseMetadataRepository(ABC):
     @abstractmethod
     def list_teams(self) -> list[Team]:
         """List all registered teams."""
+        pass
+
+    # Members
+    @abstractmethod
+    def create_member(self, member: Member) -> Member:
+        """Register a new team member."""
+        pass
+
+    @abstractmethod
+    def get_member_by_email(self, email: str) -> Member | None:
+        """Retrieve a member by email (member ID)."""
+        pass
+
+    @abstractmethod
+    def get_member_by_api_key(self, api_key: str) -> Member | None:
+        """Retrieve a member by API key."""
+        pass
+
+    @abstractmethod
+    def list_members_by_team(self, team_id: str) -> list[Member]:
+        """List all members belonging to a team."""
+        pass
+
+    @abstractmethod
+    def update_member_api_key(self, email: str, new_api_key: str) -> Member | None:
+        """Regenerate/update a member's API key."""
+        pass
+
+    @abstractmethod
+    def delete_member(self, email: str, team_id: str) -> bool:
+        """Remove a member from a team."""
         pass
 
     # Datasets

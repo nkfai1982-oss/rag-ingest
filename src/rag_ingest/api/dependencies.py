@@ -6,7 +6,7 @@ from fastapi import Depends, Header, HTTPException, status
 from qdrant_client import QdrantClient
 
 from rag_ingest.config import Settings, settings
-from rag_ingest.domain.entities import Team
+from rag_ingest.domain.entities import Member, Team
 from rag_ingest.domain.protocols import (
     BaseEmbedder,
     BaseMetadataRepository,
@@ -75,11 +75,11 @@ def get_pipeline() -> IngestionPipeline:
     return _pipeline
 
 
-def get_current_team(
+def get_current_member(
     authorization: Annotated[str | None, Header()] = None,
     repo: Annotated[BaseMetadataRepository, Depends(get_repository)] = None,  # type: ignore[assignment]
-) -> Team:
-    """Authenticates tenant using Bearer token from Authorization header."""
+) -> Member:
+    """Authenticates team member using Bearer token from Authorization header."""
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -96,12 +96,26 @@ def get_current_team(
         )
 
     token = parts[1]
-    team = repo.get_team_by_api_key(token)
-    if not team:
+    member = repo.get_member_by_api_key(token)
+    if not member:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid team API key",
+            detail="Invalid member API key",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    return member
+
+
+def get_current_team(
+    member: Annotated[Member, Depends(get_current_member)],
+    repo: Annotated[BaseMetadataRepository, Depends(get_repository)],
+) -> Team:
+    """Resolves the team belonging to the authenticated member."""
+    team = repo.get_team_by_id(member.team_id)
+    if not team:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Team '{member.team_id}' not found for member '{member.email}'",
+        )
     return team

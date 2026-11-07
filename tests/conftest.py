@@ -17,7 +17,7 @@ from rag_ingest.api.dependencies import (
     get_vector_store,
 )
 from rag_ingest.api.main import create_app
-from rag_ingest.domain.entities import Dataset, Team
+from rag_ingest.domain.entities import Dataset, Member, Team
 from rag_ingest.domain.protocols import BaseEmbedder
 from rag_ingest.pipeline.cleaner import CleanProcessor
 from rag_ingest.pipeline.orchestrator import IngestionPipeline
@@ -59,15 +59,21 @@ def sqlite_repo() -> Generator[SQLiteMetadataRepository, None, None]:
     repo = SQLiteMetadataRepository(conn_provider)
     repo.init_db()
 
-    # Pre-seed test team and dataset
+    # Pre-seed test team, member, and dataset
     test_team = Team(
         id="test_team_1",
         name="Engineering Team",
-        api_key="test_api_key_123",
         default_chunk_size=500,
         default_chunk_overlap=50,
     )
     repo.create_team(test_team)
+
+    test_member = Member(
+        email="admin@test.com",
+        team_id="test_team_1",
+        api_key="test_api_key_123",
+    )
+    repo.create_member(test_member)
 
     test_dataset = Dataset(
         id="test_dataset_1",

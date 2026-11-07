@@ -16,16 +16,21 @@ def test_api_auth_required(test_client: TestClient) -> None:
 
 
 def test_api_team_and_dataset_lifecycle(test_client: TestClient) -> None:
-    # 1. Register team
-    create_res = test_client.post(
-        "/v1/teams",
-        json={"name": "New Team Alpha", "default_chunk_size": 400},
+    # 1. Register member specifying team
+    register_res = test_client.post(
+        "/v1/members/register",
+        json={
+            "email": "alpha_lead@example.com",
+            "team_id": "team_alpha",
+            "team_name": "New Team Alpha",
+        },
     )
-    assert create_res.status_code == 201
-    team_data = create_res.json()
-    api_key = team_data["api_key"]
-    team_id = team_data["id"]
-    assert team_id.startswith("team_")
+    assert register_res.status_code == 201
+    member_data = register_res.json()
+    api_key = member_data["api_key"]
+    team_id = member_data["team_id"]
+    assert team_id == "team_alpha"
+    assert api_key.startswith("rag_m_")
 
     headers = {"Authorization": f"Bearer {api_key}"}
 
